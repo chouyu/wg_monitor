@@ -85,6 +85,24 @@ class TestParser(unittest.TestCase):
         peer_never = PeerInfo("wg0", "key", "ep", "10.0.0.1/32", 0, threshold)
         self.assertFalse(peer_never.is_online)
 
+    def test_parse_allowed_ips_filtering(self):
+        """测试 AllowedIPs 过滤逻辑 (/32, /128 优先)"""
+        # Case 1: 混合 IP，只保留 /32
+        peer = PeerInfo("wg0", "key", "ep", "10.0.0.1/32, 192.168.1.0/24", 0, 180)
+        self.assertEqual(peer.sanitized_allowed_ips, "10.0.0.1/32")
+
+        # Case 2: 只有网段，保留所有
+        peer = PeerInfo("wg0", "key", "ep", "192.168.1.0/24, 172.16.0.0/12", 0, 180)
+        self.assertEqual(peer.sanitized_allowed_ips, "192.168.1.0/24, 172.16.0.0/12")
+
+        # Case 3: IPv6 混合
+        peer = PeerInfo("wg0", "key", "ep", "fd00::1/128, fd00::/64", 0, 180)
+        self.assertEqual(peer.sanitized_allowed_ips, "fd00::1/128")
+
+        # Case 4: 空
+        peer = PeerInfo("wg0", "key", "ep", "(none)", 0, 180)
+        self.assertEqual(peer.sanitized_allowed_ips, "(none)")
+
 
 if __name__ == "__main__":
     unittest.main()

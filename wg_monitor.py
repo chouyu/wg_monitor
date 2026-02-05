@@ -78,12 +78,28 @@ class PeerInfo:
 
     @property
     def sanitized_allowed_ips(self) -> str:
-        """返回安全的 AllowedIPs 字符串"""
+        """返回安全的 AllowedIPs 字符串
+
+        优先返回 /32 (IPv4) 和 /128 (IPv6) 主机地址。
+        如果不存在主机地址，则返回所有 IP（作为 fallback）。
+        """
         if not self.allowed_ips:
             return "N/A"
+
         # 简单清洗
-        safe_ips = "".join(c for c in self.allowed_ips if c.isprintable())
-        return safe_ips[:1024]  # 限制长度
+        safe_ips_str = "".join(c for c in self.allowed_ips if c.isprintable())
+
+        # 分割 IP 列表
+        ips = [ip.strip() for ip in safe_ips_str.split(",")]
+
+        # 筛选主机 IP (/32, /128)
+        host_ips = [ip for ip in ips if ip.endswith("/32") or ip.endswith("/128")]
+
+        if host_ips:
+            return ", ".join(host_ips)[:1024]
+
+        # Fallback: 如果没有主机 IP，返回所有（可能是路由模式）
+        return safe_ips_str[:1024]
 
     @property
     def sanitized_pubkey(self) -> str:
