@@ -19,20 +19,20 @@ Security:
     - Log injection prevention
 """
 
-import subprocess
-import time
+import argparse
 import datetime
 import logging
-import argparse
-import signal
-import sys
 import os
 import re
-from pathlib import Path
-from logging.handlers import RotatingFileHandler
+import signal
+import subprocess
+import sys
+import time
 from dataclasses import dataclass
-from typing import Dict, Optional, Any
+from logging.handlers import RotatingFileHandler
+from pathlib import Path
 from threading import Event
+from typing import Any, Dict, Optional
 
 # 默认配置
 DEFAULT_LOG_PATH = "/var/log/wg_monitor.log"
@@ -174,7 +174,8 @@ class WireGuardMonitor:
 
             if not allowed:
                 sys.stderr.write(
-                    f"Error: Log path {log_path} is not in allowed directories: {VALID_LOG_PATHS}\n"
+                    f"Error: Log path {log_path} is not in allowed directories: "
+                    f"{VALID_LOG_PATHS}\n"
                 )
                 sys.stderr.write(f"Using default: {DEFAULT_LOG_PATH}\n")
                 return DEFAULT_LOG_PATH
@@ -213,7 +214,8 @@ class WireGuardMonitor:
             logger.addHandler(file_handler)
         except PermissionError:
             sys.stderr.write(
-                f"Error: No permission to write to {log_path}. Run as root or change path.\n"
+                f"Error: No permission to write to {log_path}. "
+                "Run as root or change path.\n"
             )
             sys.exit(1)
         except OSError as e:
@@ -320,7 +322,8 @@ class WireGuardMonitor:
                 last_handshake = int(parts[5])
                 if last_handshake < 0:
                     self.logger.warning(
-                        f"Negative handshake timestamp for {pubkey[:16]}..., treating as 0"
+                        f"Negative handshake timestamp for {pubkey[:16]}..., "
+                        "treating as 0"
                     )
                     last_handshake = 0
             except (ValueError, IndexError):
@@ -347,15 +350,19 @@ class WireGuardMonitor:
     def _format_peer_info(self, peer: PeerInfo) -> str:
         """格式化 Peer 信息用于日志输出（安全版本）"""
         ips = peer.sanitized_allowed_ips
-        # 动态标签：如果包含逗号，说明是复数，或者是带掩码的网段（此时保持 IPs 比较安全）
+        # 动态标签：如果包含逗号，说明是复数，或者是带掩码的网段
         # 或者我们可以更激进：只有当它是纯IP且没有逗号时，用 IP。
         # 如果 sanitized_allowed_ips 返回的是 "10.0.0.1" (无逗号，无掩码)，用 [IP: ...]
         # 如果是 "10.0.0.1, 10.0.0.2" (有逗号)，用 [IPs: ...]
-        # 如果是 "192.168.1.0/24" (fallback情况，带掩码)，用 [IPs: ...] 比较合适，或者 [AllowedIPs: ...]
+        # 如果是 "192.168.1.0/24" (fallback情况，带掩码)，用 [IPs: ...] 比较合适，
+        # 或者 [AllowedIPs: ...]
 
         # 简单判定：如果没有逗号，且不包含 '/' (说明去掉了掩码)，则为单 IP
         label = "IP" if "," not in ips and "/" not in ips else "IPs"
-        return f"[{peer.iface}] {peer.sanitized_pubkey} ({peer.sanitized_endpoint}) [{label}: {ips}]"
+        return (
+            f"[{peer.iface}] {peer.sanitized_pubkey} "
+            f"({peer.sanitized_endpoint}) [{label}: {ips}]"
+        )
 
     def _format_handshake_time(self, timestamp: int) -> str:
         """格式化握手时间（UTC 时间，避免时区混淆）"""
@@ -433,8 +440,9 @@ class WireGuardMonitor:
 
                     self.logger.log(
                         log_level,
-                        f"New peer discovered: {self._format_peer_info(peer)} - {status} "
-                        f"(Last handshake: {self._format_handshake_time(peer.last_handshake)})",
+                        f"New peer discovered: {self._format_peer_info(peer)} - "
+                        f"{status} (Last handshake: "
+                        f"{self._format_handshake_time(peer.last_handshake)})",
                     )
 
                 else:
@@ -449,18 +457,23 @@ class WireGuardMonitor:
 
                         self.logger.log(
                             log_level,
-                            f"Status change: {self._format_peer_info(peer)} → {status_str} "
-                            f"(Last handshake: {self._format_handshake_time(peer.last_handshake)})",
+                            f"Status change: {self._format_peer_info(peer)} "
+                            f"→ {status_str} (Last handshake: "
+                            f"{self._format_handshake_time(peer.last_handshake)})",
                         )
 
-                    # 2. 检测 Endpoint 变更 (Roaming) - 仅在 Online 时或变为 Online 时有意义
+                    # 2. 检测 Endpoint 变更 (Roaming)
+                    # 仅在 Online 时或变为 Online 时有意义
                     # 如果之前是 Online 且现在也是 Online，但 Endpoint 变了
-                    # 或者如果刚变成 Online，我们已经在上面的 Status change 记录了新的 Endpoint (通过 _format_peer_info)，
+                    # 或者如果刚变成 Online，我们已经在上面的 Status change
+                    # 记录了新的 Endpoint (通过 _format_peer_info)，
                     # 所以这里主要关注 "保持 Online 但换了 IP" 的情况。
                     elif is_online and last_peer.endpoint != peer.endpoint:
                         self.logger.info(
-                            f"Endpoint changed (Roaming): {self._format_peer_info(peer)} "
-                            f"(Old: {last_peer.sanitized_endpoint} → New: {peer.sanitized_endpoint})"
+                            f"Endpoint changed (Roaming): "
+                            f"{self._format_peer_info(peer)} "
+                            f"(Old: {last_peer.sanitized_endpoint} "
+                            f"→ New: {peer.sanitized_endpoint})"
                         )
 
                     # 更新状态
@@ -529,13 +542,18 @@ Security notes:
         "--threshold",
         type=int,
         default=DEFAULT_OFFLINE_THRESHOLD,
-        help=f"Seconds without handshake to consider offline (default: {DEFAULT_OFFLINE_THRESHOLD})",
+        help=(
+            "Seconds without handshake to consider offline "
+            f"(default: {DEFAULT_OFFLINE_THRESHOLD})"
+        ),
     )
     parser.add_argument(
         "--stats-interval",
         type=int,
         default=DEFAULT_STATS_INTERVAL,
-        help=f"Statistics report interval in seconds (default: {DEFAULT_STATS_INTERVAL})",
+        help=(
+            f"Statistics report interval in seconds (default: {DEFAULT_STATS_INTERVAL})"
+        ),
     )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parser.add_argument(

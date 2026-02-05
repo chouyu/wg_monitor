@@ -1,12 +1,14 @@
 import unittest
-import logging
-from unittest.mock import MagicMock, patch, PropertyMock
-from wg_monitor import WireGuardMonitor, PeerInfo
+from unittest.mock import MagicMock, PropertyMock, patch
+from typing import Any
+
+from wg_monitor import PeerInfo, WireGuardMonitor
 
 
 class TestMonitor(unittest.TestCase):
-    def setUp(self):
-        # Mock _setup_logging and _validate_config to avoid filesystem/permission issues during test init
+    def setUp(self) -> None:
+        # Mock _setup_logging and _validate_config to avoid filesystem/permission issues
+        # during test init
         with patch.object(WireGuardMonitor, "_setup_logging"), patch.object(
             WireGuardMonitor, "_validate_config"
         ), patch.object(
@@ -24,7 +26,7 @@ class TestMonitor(unittest.TestCase):
         self.monitor.logger = MagicMock()
 
     @patch("wg_monitor.subprocess.run")
-    def test_fetch_dump_success(self, mock_run):
+    def test_fetch_dump_success(self, mock_run: Any) -> None:
         mock_result = MagicMock()
         mock_result.stdout = "mock output"
         mock_run.return_value = mock_result
@@ -44,7 +46,7 @@ class TestMonitor(unittest.TestCase):
             self.assertEqual(env["HOME"], os.environ["HOME"])
 
     @patch("wg_monitor.subprocess.run")
-    def test_fetch_dump_failure(self, mock_run):
+    def test_fetch_dump_failure(self, mock_run: Any) -> None:
         from subprocess import CalledProcessError
 
         mock_run.side_effect = CalledProcessError(1, ["wg"], stderr="error")
@@ -53,7 +55,7 @@ class TestMonitor(unittest.TestCase):
         self.assertEqual(output, "")
         self.monitor.logger.error.assert_called()  # type: ignore
 
-    def test_state_change_detection(self):
+    def test_state_change_detection(self) -> None:
         pubkey = "A" * 43 + "="
         peer = PeerInfo("wg0", pubkey, "1.1.1.1:123", "10.0.0.1/32", 1678888888, 180)
 
@@ -66,7 +68,6 @@ class TestMonitor(unittest.TestCase):
             mock_online.return_value = True
 
             # 手动执行模拟逻辑
-            is_online = peer.is_online
             if peer.pubkey not in self.monitor.peer_states:
                 self.monitor.peer_states[peer.pubkey] = peer
 
@@ -75,16 +76,6 @@ class TestMonitor(unittest.TestCase):
 
             # 状态变为 Offline
             mock_online.return_value = False
-            is_online = peer.is_online
-
-            # 模拟逻辑：从 peer_states 获取上一个状态
-            last_peer = self.monitor.peer_states[peer.pubkey]
-            # 注意：在测试中我们复用了同一个 peer 对象，但在实际运行中每次解析都会生成新对象。
-            # 为了测试逻辑，我们这里假设 is_online 变化了。
-
-            # 实际上，run 循环是比较 last_peer.is_online 和 当前 peer.is_online
-            # 因为我们在测试中Mock了同一个类的属性，所以 last_peer.is_online 也会变成 False。
-            # 这使得测试逻辑稍微复杂。
 
             # 让我们简化测试：直接测试 peer_states 的存储是否正确
             peer_offline = PeerInfo(
