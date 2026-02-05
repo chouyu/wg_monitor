@@ -1,23 +1,17 @@
-# WireGuard Monitor Configuration
-# 此文件中的变量会被服务读取
+# Configuration for wg-monitor
+# Installed to /etc/default/wg-monitor
 
-# 日志路径
-WG_MONITOR_LOG_PATH="/var/log/wg_monitor.log"
+# Path to the log file (must be in /var/log, /tmp, or ./logs)
+LOG_PATH="/var/log/wg_monitor.log"
 
-# 检查间隔（秒）
-WG_MONITOR_INTERVAL=30
+# Check interval in seconds
+INTERVAL=30
 
-# 离线阈值（秒）
-WG_MONITOR_THRESHOLD=180
+# Seconds without handshake to consider a peer offline
+THRESHOLD=180
 
-# 统计间隔（秒）
-WG_MONITOR_STATS_INTERVAL=3600
+# Statistics report interval in seconds
+STATS_INTERVAL=3600
 
-# 调试模式（true/false）
-WG_MONITOR_DEBUG=false
-
-# Python 解释器路径
-PYTHON_BIN=/usr/bin/python3
-
-# 脚本路径
-SCRIPT_PATH=/opt/wg-monitor/wg_monitor.py
+# Enable debug logging (true/false)
+DEBUG=false

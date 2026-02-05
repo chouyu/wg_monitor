@@ -34,30 +34,25 @@ python3 --version || {
 
 # 4. 检查 WireGuard
 echo "Checking WireGuard installation..."
-which wg > /dev/null || {
+if ! command -v wg &> /dev/null; then
     echo -e "${YELLOW}Warning: 'wg' command not found. Please install WireGuard.${NC}"
-}
+fi
 
 # 5. 安装 systemd 服务
-echo "Installing systemd service..."
+echo "Installing systemd services..."
 cp wg-monitor.service /etc/systemd/system/
+cp wg-monitor@.service /etc/systemd/system/
 chmod 644 /etc/systemd/system/wg-monitor.service
+chmod 644 /etc/systemd/system/wg-monitor@.service
 
 # 6. 安装环境配置文件
+echo "Installing default configuration..."
 if [ ! -f /etc/default/wg-monitor ]; then
-    echo "Creating default configuration..."
-    cat > /etc/default/wg-monitor <<EOF
-WG_MONITOR_LOG_PATH="/var/log/wg_monitor.log"
-WG_MONITOR_INTERVAL=30
-WG_MONITOR_THRESHOLD=180
-WG_MONITOR_STATS_INTERVAL=3600
-WG_MONITOR_DEBUG=false
-PYTHON_BIN=/usr/bin/python3
-SCRIPT_PATH=/opt/wg-monitor/wg_monitor.py
-EOF
+    cp wg-monitor.default /etc/default/wg-monitor
     chmod 644 /etc/default/wg-monitor
 else
-    echo -e "${YELLOW}Configuration file /etc/default/wg-monitor already exists, skipping...${NC}"
+    echo -e "${YELLOW}Configuration file /etc/default/wg-monitor already exists. Keep existing config.${NC}"
+    echo -e "${YELLOW}A new default config is available at wg-monitor.default${NC}"
 fi
 
 # 7. 安装 logrotate 配置
@@ -69,15 +64,21 @@ chmod 644 /etc/logrotate.d/wg-monitor
 echo "Reloading systemd daemon..."
 systemctl daemon-reload
 
-# 9. 启用并启动服务
-echo "Enabling service..."
+# 9. 启用并启动服务 (单例模式作为默认)
+echo "Enabling default service..."
 systemctl enable wg-monitor.service
+# 如果服务未运行，则启动；如果已运行，建议用户手动重启
+if ! systemctl is-active --quiet wg-monitor.service; then
+    echo "Starting service..."
+    systemctl start wg-monitor.service
+else
+    echo -e "${YELLOW}Service is already running. Please restart manually to apply changes: systemctl restart wg-monitor${NC}"
+fi
 
 echo -e "${GREEN}Installation complete!${NC}"
 echo ""
 echo "Next steps:"
 echo "  1. Edit configuration: nano /etc/default/wg-monitor"
-echo "  2. Start service:      systemctl start wg-monitor"
+echo "  2. Restart service:    systemctl restart wg-monitor"
 echo "  3. Check status:       systemctl status wg-monitor"
-echo "  4. View logs:          journalctl -u wg-monitor -f"
-echo "  5. Check log file:     tail -f /var/log/wg_monitor.log"
+echo "  4. Multi-instance:     cp /etc/default/wg-monitor /etc/default/wg-monitor-wg0 && systemctl start wg-monitor@wg0"
