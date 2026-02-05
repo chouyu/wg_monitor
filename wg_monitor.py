@@ -365,12 +365,12 @@ class WireGuardMonitor:
         )
 
     def _format_handshake_time(self, timestamp: int) -> str:
-        """格式化握手时间（UTC 时间，避免时区混淆）"""
+        """格式化握手时间（本地时间，与日志时间戳对齐）"""
         if timestamp <= 0:
             return "Never"
         try:
-            dt = datetime.datetime.utcfromtimestamp(timestamp)
-            return dt.strftime("%Y-%m-%d %H:%M:%S UTC")
+            dt = datetime.datetime.fromtimestamp(timestamp)
+            return dt.strftime("%Y-%m-%d %H:%M:%S")
         except (ValueError, OSError):
             return "Invalid"
 
