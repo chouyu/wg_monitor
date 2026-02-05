@@ -31,7 +31,7 @@ import re
 from pathlib import Path
 from logging.handlers import RotatingFileHandler
 from dataclasses import dataclass
-from typing import Dict, Optional
+from typing import Dict, Optional, Any
 from threading import Event
 
 # 默认配置
@@ -254,7 +254,7 @@ class WireGuardMonitor:
             self.logger.warning("Stats interval too small (<60s), setting to 60s")
             self.stats_interval = 60
 
-    def _signal_handler(self, signum: int, frame) -> None:
+    def _signal_handler(self, signum: int, frame: Any) -> None:
         """处理退出信号"""
         self.logger.info(f"Received signal {signum}, shutting down gracefully...")
         self.running = False
