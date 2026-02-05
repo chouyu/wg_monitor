@@ -54,6 +54,7 @@ class PeerInfo:
     iface: str
     pubkey: str
     endpoint: str
+    allowed_ips: str  # 新增
     last_handshake: int
     threshold: int
 
@@ -74,6 +75,15 @@ class PeerInfo:
         # 移除换行符和控制字符
         safe_endpoint = "".join(c for c in self.endpoint if c.isprintable())
         return safe_endpoint[:MAX_ENDPOINT_LENGTH]
+
+    @property
+    def sanitized_allowed_ips(self) -> str:
+        """返回安全的 AllowedIPs 字符串"""
+        if not self.allowed_ips:
+            return "N/A"
+        # 简单清洗
+        safe_ips = "".join(c for c in self.allowed_ips if c.isprintable())
+        return safe_ips[:1024]  # 限制长度
 
     @property
     def sanitized_pubkey(self) -> str:
@@ -98,7 +108,7 @@ class WireGuardMonitor:
         self.threshold = threshold
         self.stats_interval = stats_interval
         self.running = True
-        self.peer_states: Dict[str, bool] = {}  # {pubkey: is_online}
+        self.peer_states: Dict[str, PeerInfo] = {}  # 改为存储 PeerInfo 对象以对比状态
         self._stop_event = Event()
         self._wg_not_found_logged = False
 
@@ -280,6 +290,7 @@ class WireGuardMonitor:
             iface = parts[0]
             pubkey = parts[1]
             endpoint = parts[3]
+            allowed_ips = parts[4]  # 解析 AllowedIPs
 
             # 验证公钥格式
             if not WG_PUBKEY_PATTERN.match(pubkey):
@@ -305,6 +316,7 @@ class WireGuardMonitor:
                 iface=iface,
                 pubkey=pubkey,
                 endpoint=endpoint,
+                allowed_ips=allowed_ips,
                 last_handshake=last_handshake,
                 threshold=self.threshold,
             )
@@ -316,7 +328,7 @@ class WireGuardMonitor:
 
     def _format_peer_info(self, peer: PeerInfo) -> str:
         """格式化 Peer 信息用于日志输出（安全版本）"""
-        return f"[{peer.iface}] {peer.sanitized_pubkey} ({peer.sanitized_endpoint})"
+        return f"[{peer.iface}] {peer.sanitized_pubkey} ({peer.sanitized_endpoint}) [IPs: {peer.sanitized_allowed_ips}]"
 
     def _format_handshake_time(self, timestamp: int) -> str:
         """格式化握手时间（UTC 时间，避免时区混淆）"""
@@ -388,7 +400,7 @@ class WireGuardMonitor:
 
                 # 新发现的 Peer
                 if peer.pubkey not in self.peer_states:
-                    self.peer_states[peer.pubkey] = is_online
+                    self.peer_states[peer.pubkey] = peer
                     log_level = logging.INFO if is_online else logging.WARNING
                     status = "ONLINE" if is_online else "OFFLINE"
 
@@ -398,19 +410,34 @@ class WireGuardMonitor:
                         f"(Last handshake: {self._format_handshake_time(peer.last_handshake)})",
                     )
 
-                # 状态发生翻转
-                elif self.peer_states[peer.pubkey] != is_online:
-                    self.stats["state_changes"] += 1
-                    status_str = "ONLINE" if is_online else "OFFLINE"
-                    log_level = logging.INFO if is_online else logging.WARNING
+                else:
+                    last_peer = self.peer_states[peer.pubkey]
+                    last_is_online = last_peer.is_online
 
-                    self.logger.log(
-                        log_level,
-                        f"Status change: {self._format_peer_info(peer)} → {status_str} "
-                        f"(Last handshake: {self._format_handshake_time(peer.last_handshake)})",
-                    )
+                    # 1. 检测状态翻转
+                    if last_is_online != is_online:
+                        self.stats["state_changes"] += 1
+                        status_str = "ONLINE" if is_online else "OFFLINE"
+                        log_level = logging.INFO if is_online else logging.WARNING
 
-                    self.peer_states[peer.pubkey] = is_online
+                        self.logger.log(
+                            log_level,
+                            f"Status change: {self._format_peer_info(peer)} → {status_str} "
+                            f"(Last handshake: {self._format_handshake_time(peer.last_handshake)})",
+                        )
+
+                    # 2. 检测 Endpoint 变更 (Roaming) - 仅在 Online 时或变为 Online 时有意义
+                    # 如果之前是 Online 且现在也是 Online，但 Endpoint 变了
+                    # 或者如果刚变成 Online，我们已经在上面的 Status change 记录了新的 Endpoint (通过 _format_peer_info)，
+                    # 所以这里主要关注 "保持 Online 但换了 IP" 的情况。
+                    elif is_online and last_peer.endpoint != peer.endpoint:
+                        self.logger.info(
+                            f"Endpoint changed (Roaming): {self._format_peer_info(peer)} "
+                            f"(Old: {last_peer.sanitized_endpoint} → New: {peer.sanitized_endpoint})"
+                        )
+
+                    # 更新状态
+                    self.peer_states[peer.pubkey] = peer
 
             # 定期输出统计
             current_time = time.time()

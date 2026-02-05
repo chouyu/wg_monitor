@@ -35,6 +35,7 @@ class TestParser(unittest.TestCase):
         assert peer is not None  # for mypy
         self.assertEqual(peer.iface, "wg0")
         self.assertEqual(peer.pubkey, valid_pubkey)
+        self.assertEqual(peer.allowed_ips, "10.0.0.2/32")
 
         self.assertEqual(peer.endpoint, "192.168.1.100:51820")
         self.assertEqual(peer.last_handshake, 1678888888)
@@ -73,13 +74,15 @@ class TestParser(unittest.TestCase):
         now = int(time.time())
         threshold = 180
 
-        peer_online = PeerInfo("wg0", "key", "ep", now - 10, threshold)
+        peer_online = PeerInfo("wg0", "key", "ep", "10.0.0.1/32", now - 10, threshold)
         self.assertTrue(peer_online.is_online)
 
-        peer_offline = PeerInfo("wg0", "key", "ep", now - threshold - 1, threshold)
+        peer_offline = PeerInfo(
+            "wg0", "key", "ep", "10.0.0.1/32", now - threshold - 1, threshold
+        )
         self.assertFalse(peer_offline.is_online)
 
-        peer_never = PeerInfo("wg0", "key", "ep", 0, threshold)
+        peer_never = PeerInfo("wg0", "key", "ep", "10.0.0.1/32", 0, threshold)
         self.assertFalse(peer_never.is_online)
 
 
