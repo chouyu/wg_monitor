@@ -1,17 +1,35 @@
-# WireGuard Peer Status Monitor
+# WireGuard Peer Status Monitor & Logger
 
-A production-grade, lightweight monitoring tool designed to track WireGuard peer connectivity status. It analyzes handshake timestamps to detect peer online/offline states and logs transitions, enabling reliable monitoring for WireGuard VPN infrastructure.
+A production-grade auditing tool for WireGuard VPNs. It continuously monitors peer connectivity and maintains a **precise historical log of connection events** (Online/Offline transitions) based on handshake timestamps.
+
+## Why use this?
+While `wg show` gives you the *current* status, it doesn't tell you **when** a peer connected or disconnected. This tool fills that gap by providing a persistent audit trail, essential for:
+- **Security Auditing**: Know exactly when users access the VPN.
+- **Troubleshooting**: Correlate connectivity issues with specific timestamps.
+- **Usage Analysis**: Track session durations and stability.
 
 ## Key Features
 
+- **Connection Auditing**: Logs `ONLINE` and `OFFLINE` events with precise UTC timestamps.
 - **Zero Dependencies**: Written in pure Python 3 (Standard Library only). No `pip install` required.
-- **Production Ready**: Designed to run as a Systemd service with graceful shutdown handling.
+- **Production Ready**: Runs as a Systemd service with automated log rotation (10MB x 5 backups).
 - **Security First**: 
   - Strict input validation and sanitization.
-  - Path traversal protection for log files.
+  - Path traversal protection.
   - Safe subprocess execution with environment isolation.
-- **Robust Logging**: Built-in log rotation (10MB x 5 backups) and standardized format.
-- **Configurable**: Customizable check intervals, offline thresholds, and log paths.
+- **Configurable**: Customizable check intervals and timeout thresholds.
+
+## Audit Log Example
+
+The tool generates structured logs in `/var/log/wg_monitor.log`:
+
+```text
+2023-10-27 10:00:00 - INFO - Monitor started - Interval: 30s, Threshold: 180s
+2023-10-27 10:01:30 - INFO - New peer discovered: [wg0] AbC1...8xYz (192.168.1.50:51820) - ONLINE (Last handshake: 2023-10-27 10:01:25 UTC)
+2023-10-27 10:45:00 - WARNING - Status change: [wg0] AbC1...8xYz (192.168.1.50:51820) → OFFLINE (Last handshake: 2023-10-27 10:01:25 UTC)
+2023-10-27 11:15:20 - INFO - Status change: [wg0] AbC1...8xYz (192.168.1.50:51820) → ONLINE (Last handshake: 2023-10-27 11:15:15 UTC)
+2023-10-27 12:00:00 - INFO - Statistics - Checks: 120, Failures: 0, State changes: 2, Tracking peers: 15
+```
 
 ## Requirements
 
@@ -54,10 +72,10 @@ You can configure the service by editing `/etc/default/wg-monitor`.
 | Variable | Flag | Default | Description |
 |----------|------|---------|-------------|
 | `LOG_PATH` | `--log-path` | `/var/log/wg_monitor.log` | Path to the log file. |
-| `CHECK_INTERVAL` | `--interval` | `30` | How often (seconds) to check peer status. |
-| `OFFLINE_THRESHOLD`| `--threshold`| `180` | Seconds since last handshake to mark peer offline. |
+| `INTERVAL` | `--interval` | `30` | How often (seconds) to check peer status. |
+| `THRESHOLD`| `--threshold`| `180` | Seconds since last handshake to mark peer offline. |
 | `STATS_INTERVAL` | `--stats-interval`| `3600` | How often (seconds) to log summary statistics. |
-| `DEBUG` | `--debug` | (Disabled) | Enable verbose debug logging. |
+| `DEBUG` | `--debug` | `false` | Enable verbose debug logging. |
 
 ### Running Multiple Instances
 
@@ -80,7 +98,7 @@ Real-time logs from journald:
 sudo journalctl -u wg-monitor -f
 ```
 
-File logs (if configured):
+File logs (connection history):
 ```bash
 sudo tail -f /var/log/wg_monitor.log
 ```
