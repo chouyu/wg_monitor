@@ -1,75 +1,121 @@
-# 1. 下载或克隆仓库
-cd /tmp
-# 假设文件已准备好
+# WireGuard Peer Status Monitor
 
-# 2. 赋予执行权限
-chmod +x install.sh uninstall.sh
+A production-grade, lightweight monitoring tool designed to track WireGuard peer connectivity status. It analyzes handshake timestamps to detect peer online/offline states and logs transitions, enabling reliable monitoring for WireGuard VPN infrastructure.
 
-# 3. 运行安装脚本
+## Key Features
+
+- **Zero Dependencies**: Written in pure Python 3 (Standard Library only). No `pip install` required.
+- **Production Ready**: Designed to run as a Systemd service with graceful shutdown handling.
+- **Security First**: 
+  - Strict input validation and sanitization.
+  - Path traversal protection for log files.
+  - Safe subprocess execution with environment isolation.
+- **Robust Logging**: Built-in log rotation (10MB x 5 backups) and standardized format.
+- **Configurable**: Customizable check intervals, offline thresholds, and log paths.
+
+## Requirements
+
+- Linux system (Requires Root privileges to run `wg show`)
+- Python 3.7+
+- WireGuard installed (`wg` command available)
+
+## Installation
+
+### Automatic Installation
+
+The included script installs the monitor as a systemd service:
+
+```bash
+# 1. Clone repository
+git clone https://github.com/your-repo/wg_monitor.git
+cd wg_monitor
+
+# 2. Run installer (requires sudo)
 sudo ./install.sh
+```
 
-# 4. 启动服务
-sudo systemctl start wg-monitor
+### Manual Installation
 
-# 5. 检查状态
+If you prefer manual setup:
+
+1.  Copy `wg_monitor.py` to `/opt/wg-monitor/`.
+2.  Copy `wg-monitor.default` to `/etc/default/wg-monitor`.
+3.  Copy `wg-monitor.service` to `/etc/systemd/system/`.
+4.  Reload systemd and start:
+    ```bash
+    sudo systemctl daemon-reload
+    sudo systemctl enable --now wg-monitor
+    ```
+
+## Configuration
+
+You can configure the service by editing `/etc/default/wg-monitor`.
+
+| Variable | Flag | Default | Description |
+|----------|------|---------|-------------|
+| `LOG_PATH` | `--log-path` | `/var/log/wg_monitor.log` | Path to the log file. |
+| `CHECK_INTERVAL` | `--interval` | `30` | How often (seconds) to check peer status. |
+| `OFFLINE_THRESHOLD`| `--threshold`| `180` | Seconds since last handshake to mark peer offline. |
+| `STATS_INTERVAL` | `--stats-interval`| `3600` | How often (seconds) to log summary statistics. |
+| `DEBUG` | `--debug` | (Disabled) | Enable verbose debug logging. |
+
+### Running Multiple Instances
+
+The service supports multiple instances (e.g., for different interfaces or configurations).
+Use the `@` syntax with a configuration file suffix:
+
+1.  Create config: `/etc/default/wg-monitor-wg0`
+2.  Start service: `sudo systemctl start wg-monitor@wg0`
+
+## Usage
+
+### Check Service Status
+```bash
 sudo systemctl status wg-monitor
+```
 
-# 启动服务
-sudo systemctl start wg-monitor
-
-# 停止服务
-sudo systemctl stop wg-monitor
-
-# 重启服务
-sudo systemctl restart wg-monitor
-
-# 查看状态
-sudo systemctl status wg-monitor
-
-# 查看实时日志（journald）
+### View Logs
+Real-time logs from journald:
+```bash
 sudo journalctl -u wg-monitor -f
+```
 
-# 查看最近 100 行日志
-sudo journalctl -u wg-monitor -n 100
-
-# 查看文件日志
+File logs (if configured):
+```bash
 sudo tail -f /var/log/wg_monitor.log
+```
 
-# 查看启动失败原因
-sudo journalctl -u wg-monitor -xe
+### Manual Debug Run
+```bash
+sudo python3 wg_monitor.py --debug --interval 5 --threshold 60
+```
 
-# 重新加载配置（修改 /etc/default/wg-monitor 后）
-sudo systemctl restart wg-monitor
+## Development
 
-# 查看服务性能统计
-sudo systemctl show wg-monitor --property=MemoryCurrent,CPUUsageNSec
+### Running Tests
+This project uses `pytest` for testing. Since it has no external dependencies for production, you only need dev tools for testing.
 
-# 编辑环境配置
-sudo nano /etc/default/wg-monitor
+```bash
+# Install dev dependencies
+pip install pytest mypy ruff
 
-# 编辑服务文件（需重载）
-sudo nano /etc/systemd/system/wg-monitor.service
-sudo systemctl daemon-reload
-sudo systemctl restart wg-monitor
+# Run unit tests
+pytest
 
-# 1. 检查服务状态
-sudo systemctl status wg-monitor
+# Run type checks
+mypy wg_monitor.py tests/
 
-# 2. 查看详细错误
-sudo journalctl -u wg-monitor --since "10 minutes ago"
+# Run linter
+ruff check .
+```
 
-# 3. 手动运行测试
-sudo /usr/bin/python3 /opt/wg-monitor/wg_monitor.py --debug
+## Security Design
 
-# 4. 检查权限
-ls -la /opt/wg-monitor/
-ls -la /var/log/wg_monitor.log
+Since this tool runs as root (required for `wg`), security is paramount:
+1.  **Environment Isolation**: When invoking `wg`, the environment is copied but `PATH` is restricted to `/usr/bin:/usr/sbin:/bin:/sbin`.
+2.  **Input Sanitization**: All data from `wg show` (pubkeys, endpoints) is sanitized before logging to prevent log injection attacks.
+3.  **Path Validation**: Log paths are strictly validated against a whitelist (`/var/log`, `/tmp`, `./logs`) to prevent arbitrary file overwrites.
 
-# 5. 检查 WireGuard
-sudo wg show all dump
-# 为 wg0 创建配置
-sudo nano /etc/default/wg-monitor-wg0
+## License
 
-# 启动多个实例
-sudo systemctl start wg-monitor@wg0
-sudo systemctl start wg-monitor@wg1
+[MIT License](LICENSE)
