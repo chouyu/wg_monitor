@@ -1,0 +1,13 @@
+/var/log/wg_monitor.log {
+    daily
+    rotate 7
+    compress
+    delaycompress
+    missingok
+    notifempty
+    create 0640 root adm
+    sharedscripts
+    postrotate
+        systemctl reload wg-monitor.service > /dev/null 2>&1 || true
+    endscript
+}

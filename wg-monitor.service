@@ -1,0 +1,70 @@
+[Unit]
+Description=WireGuard Peer Status Monitor
+Documentation=https://github.com/your-org/wg-monitor
+After=network-online.target wg-quick@wg0.service
+Wants=network-online.target
+# 如果有多个 WireGuard 接口，添加依赖：
+# After=wg-quick@wg1.service wg-quick@wg2.service
+# Requires=wg-quick@wg0.service  # 强依赖，WireGuard 失败则此服务也失败
+
+[Service]
+Type=simple
+User=root
+Group=root
+
+# 工作目录
+WorkingDirectory=/opt/wg-monitor
+
+# 执行命令
+ExecStart=/usr/bin/python3 /opt/wg-monitor/wg_monitor.py \
+    --log-path /var/log/wg_monitor.log \
+    --interval 30 \
+    --threshold 180 \
+    --stats-interval 3600
+
+# 重启策略
+Restart=on-failure
+RestartSec=10s
+StartLimitInterval=300
+StartLimitBurst=5
+
+# 超时配置
+TimeoutStartSec=30s
+TimeoutStopSec=30s
+
+# 资源限制（防止异常消耗资源）
+LimitNOFILE=1024
+LimitNPROC=10
+MemoryMax=256M
+CPUQuota=20%
+
+# 安全加固
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ProtectHome=true
+ReadWritePaths=/var/log
+ProtectKernelTunables=true
+ProtectKernelModules=true
+ProtectControlGroups=true
+RestrictRealtime=true
+RestrictSUIDSGID=true
+LockPersonality=true
+RestrictNamespaces=true
+
+# 能力限制（只保留必需的权限）
+CapabilityBoundingSet=CAP_NET_ADMIN
+AmbientCapabilities=CAP_NET_ADMIN
+
+# 系统调用过滤（可选，需要 systemd >= 232）
+SystemCallFilter=@system-service
+SystemCallFilter=~@privileged @resources
+SystemCallErrorNumber=EPERM
+
+# 日志配置
+StandardOutput=journal
+StandardError=journal
+SyslogIdentifier=wg-monitor
+
+[Install]
+WantedBy=multi-user.target

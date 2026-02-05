@@ -1,0 +1,19 @@
+[Unit]
+Description=WireGuard Monitor for %i
+After=network-online.target wg-quick@%i.service
+Wants=network-online.target
+
+[Service]
+Type=simple
+User=root
+EnvironmentFile=/etc/default/wg-monitor-%i
+ExecStart=/usr/bin/python3 /opt/wg-monitor/wg_monitor.py \
+    --log-path ${WG_MONITOR_LOG_PATH} \
+    --interval ${WG_MONITOR_INTERVAL} \
+    --threshold ${WG_MONITOR_THRESHOLD}
+
+Restart=on-failure
+RestartSec=10s
+
+[Install]
+WantedBy=multi-user.target
