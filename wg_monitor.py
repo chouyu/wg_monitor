@@ -435,7 +435,7 @@ class WireGuardMonitor:
                 # 新发现的 Peer
                 if peer.pubkey not in self.peer_states:
                     self.peer_states[peer.pubkey] = peer
-                    log_level = logging.INFO if is_online else logging.WARNING
+                    log_level = logging.INFO
                     status = "ONLINE" if is_online else "OFFLINE"
 
                     self.logger.log(
@@ -453,7 +453,7 @@ class WireGuardMonitor:
                     if last_is_online != is_online:
                         self.stats["state_changes"] += 1
                         status_str = "ONLINE" if is_online else "OFFLINE"
-                        log_level = logging.INFO if is_online else logging.WARNING
+                        log_level = logging.INFO
 
                         self.logger.log(
                             log_level,
