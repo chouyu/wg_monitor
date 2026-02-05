@@ -96,7 +96,9 @@ class PeerInfo:
         host_ips = [ip for ip in ips if ip.endswith("/32") or ip.endswith("/128")]
 
         if host_ips:
-            return ", ".join(host_ips)[:1024]
+            # 去除 CIDR 后缀 (/32, /128) 使其看起来像纯 IP
+            cleaned_host_ips = [ip.split("/")[0] for ip in host_ips]
+            return ", ".join(cleaned_host_ips)[:1024]
 
         # Fallback: 如果没有主机 IP，返回所有（可能是路由模式）
         return safe_ips_str[:1024]
@@ -344,7 +346,16 @@ class WireGuardMonitor:
 
     def _format_peer_info(self, peer: PeerInfo) -> str:
         """格式化 Peer 信息用于日志输出（安全版本）"""
-        return f"[{peer.iface}] {peer.sanitized_pubkey} ({peer.sanitized_endpoint}) [IPs: {peer.sanitized_allowed_ips}]"
+        ips = peer.sanitized_allowed_ips
+        # 动态标签：如果包含逗号，说明是复数，或者是带掩码的网段（此时保持 IPs 比较安全）
+        # 或者我们可以更激进：只有当它是纯IP且没有逗号时，用 IP。
+        # 如果 sanitized_allowed_ips 返回的是 "10.0.0.1" (无逗号，无掩码)，用 [IP: ...]
+        # 如果是 "10.0.0.1, 10.0.0.2" (有逗号)，用 [IPs: ...]
+        # 如果是 "192.168.1.0/24" (fallback情况，带掩码)，用 [IPs: ...] 比较合适，或者 [AllowedIPs: ...]
+
+        # 简单判定：如果没有逗号，且不包含 '/' (说明去掉了掩码)，则为单 IP
+        label = "IP" if "," not in ips and "/" not in ips else "IPs"
+        return f"[{peer.iface}] {peer.sanitized_pubkey} ({peer.sanitized_endpoint}) [{label}: {ips}]"
 
     def _format_handshake_time(self, timestamp: int) -> str:
         """格式化握手时间（UTC 时间，避免时区混淆）"""
