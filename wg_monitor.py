@@ -57,15 +57,7 @@ class PeerInfo:
     allowed_ips: str  # 新增
     last_handshake: int
     threshold: int
-
-    @property
-    def is_online(self) -> bool:
-        """判断在线状态逻辑封装"""
-        if self.last_handshake <= 0:
-            return False
-        current_time = int(time.time())
-        time_since_handshake = current_time - self.last_handshake
-        return time_since_handshake < self.threshold
+    is_online: bool  # 状态快照，解析时计算
 
     @property
     def sanitized_endpoint(self) -> str:
@@ -333,6 +325,13 @@ class WireGuardMonitor:
                 self.stats["parse_errors"] += 1
                 return None
 
+            # 计算在线状态 (快照)
+            current_time = int(time.time())
+            if last_handshake <= 0:
+                is_online = False
+            else:
+                is_online = (current_time - last_handshake) < self.threshold
+
             return PeerInfo(
                 iface=iface,
                 pubkey=pubkey,
@@ -340,6 +339,7 @@ class WireGuardMonitor:
                 allowed_ips=allowed_ips,
                 last_handshake=last_handshake,
                 threshold=self.threshold,
+                is_online=is_online,
             )
 
         except (IndexError, ValueError) as e:

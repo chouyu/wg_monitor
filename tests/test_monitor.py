@@ -57,34 +57,40 @@ class TestMonitor(unittest.TestCase):
 
     def test_state_change_detection(self) -> None:
         pubkey = "A" * 43 + "="
-        peer = PeerInfo("wg0", pubkey, "1.1.1.1:123", "10.0.0.1/32", 1678888888, 180)
+        # 初始状态：Offline
+        peer = PeerInfo(
+            "wg0", pubkey, "1.1.1.1:123", "10.0.0.1/32", 1678888888, 180, True
+        )
 
         self.assertNotIn(pubkey, self.monitor.peer_states)
 
-        # 使用 PropertyMock 来 mock @property
-        with patch.object(
-            PeerInfo, "is_online", new_callable=PropertyMock
-        ) as mock_online:
-            mock_online.return_value = True
+        # 1. 发现新 Peer (Online)
+        # 这里不需要 mock Property，因为 is_online 是字段了
+        # 我们模拟 run 循环中的逻辑
 
-            # 手动执行模拟逻辑
-            if peer.pubkey not in self.monitor.peer_states:
-                self.monitor.peer_states[peer.pubkey] = peer
+        # 手动执行模拟逻辑
+        if peer.pubkey not in self.monitor.peer_states:
+            self.monitor.peer_states[peer.pubkey] = peer
 
-            self.assertIn(pubkey, self.monitor.peer_states)
-            self.assertEqual(self.monitor.peer_states[pubkey], peer)
+        self.assertIn(pubkey, self.monitor.peer_states)
+        self.assertEqual(self.monitor.peer_states[pubkey], peer)
+        self.assertTrue(self.monitor.peer_states[pubkey].is_online)
 
-            # 状态变为 Offline
-            mock_online.return_value = False
+        # 2. 状态变为 Offline
+        # 创建一个新的 PeerInfo 对象，模拟从 parse_line 返回的新状态
+        peer_offline = PeerInfo(
+            "wg0", pubkey, "1.1.1.1:123", "10.0.0.1/32", 1678888888, 180, False
+        )
 
-            # 让我们简化测试：直接测试 peer_states 的存储是否正确
-            peer_offline = PeerInfo(
-                "wg0", pubkey, "1.1.1.1:123", "10.0.0.1/32", 1678888888, 180
-            )
-            # 强制更新
-            self.monitor.peer_states[peer.pubkey] = peer_offline
+        # 模拟逻辑：检测到状态变化
+        last_peer = self.monitor.peer_states[pubkey]
+        self.assertTrue(last_peer.is_online)  # 旧状态应该是 True
+        self.assertFalse(peer_offline.is_online)  # 新状态是 False
 
-            self.assertEqual(self.monitor.peer_states[pubkey], peer_offline)
+        # 强制更新
+        self.monitor.peer_states[peer.pubkey] = peer_offline
+
+        self.assertEqual(self.monitor.peer_states[pubkey], peer_offline)
 
 
 if __name__ == "__main__":

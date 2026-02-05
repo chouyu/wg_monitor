@@ -80,34 +80,58 @@ class TestParser(unittest.TestCase):
     def test_is_online_logic(self) -> None:
         now = int(time.time())
         threshold = 180
+        valid_pubkey = "A" * 43 + "="
 
-        peer_online = PeerInfo("wg0", "key", "ep", "10.0.0.1/32", now - 10, threshold)
+        # 手动构造 PeerInfo 验证状态字段是否正确存储
+        # 注意：现在 is_online 是传入的参数，而不是计算属性，
+        # 所以这个测试主要验证我们在 _parse_line 中的计算逻辑，
+        # 但 _parse_line 内部就是我们要测的。
+        # 我们可以通过构造假数据传给 _parse_line 来测。
+
+        # Case 1: Online
+        line_online = (
+            f"wg0\t{valid_pubkey}\t(none)\tep\t10.0.0.1/32\t{now - 10}\t0\t0\t0"
+        )
+        peer_online = self.monitor._parse_line(line_online)
+        assert peer_online is not None
         self.assertTrue(peer_online.is_online)
 
-        peer_offline = PeerInfo(
-            "wg0", "key", "ep", "10.0.0.1/32", now - threshold - 1, threshold
-        )
+        # Case 2: Offline
+        line_offline = f"wg0\t{valid_pubkey}\t(none)\tep\t10.0.0.1/32\t{now - threshold - 1}\t0\t0\t0"
+        peer_offline = self.monitor._parse_line(line_offline)
+        assert peer_offline is not None
         self.assertFalse(peer_offline.is_online)
 
-        peer_never = PeerInfo("wg0", "key", "ep", "10.0.0.1/32", 0, threshold)
+        # Case 3: Never
+        line_never = f"wg0\t{valid_pubkey}\t(none)\tep\t10.0.0.1/32\t0\t0\t0\t0"
+        peer_never = self.monitor._parse_line(line_never)
+        assert peer_never is not None
         self.assertFalse(peer_never.is_online)
 
     def test_parse_allowed_ips_filtering(self) -> None:
         """测试 AllowedIPs 过滤逻辑 (/32, /128 优先)"""
+        # 由于 PeerInfo 构造函数变了，我们需要更新手动构造的部分
+        # 或者直接通过 _parse_line 测试（推荐）
+        # 这里为了简单，我们还是手动构造，但要加上 is_online=False
+
         # Case 1: 混合 IP，只保留 /32 并去掉后缀
-        peer = PeerInfo("wg0", "key", "ep", "10.0.0.1/32, 192.168.1.0/24", 0, 180)
+        peer = PeerInfo(
+            "wg0", "key", "ep", "10.0.0.1/32, 192.168.1.0/24", 0, 180, False
+        )
         self.assertEqual(peer.sanitized_allowed_ips, "10.0.0.1")
 
         # Case 2: 只有网段，保留所有 (含掩码)
-        peer = PeerInfo("wg0", "key", "ep", "192.168.1.0/24, 172.16.0.0/12", 0, 180)
+        peer = PeerInfo(
+            "wg0", "key", "ep", "192.168.1.0/24, 172.16.0.0/12", 0, 180, False
+        )
         self.assertEqual(peer.sanitized_allowed_ips, "192.168.1.0/24, 172.16.0.0/12")
 
         # Case 3: IPv6 混合，只保留 /128 并去掉后缀
-        peer = PeerInfo("wg0", "key", "ep", "fd00::1/128, fd00::/64", 0, 180)
+        peer = PeerInfo("wg0", "key", "ep", "fd00::1/128, fd00::/64", 0, 180, False)
         self.assertEqual(peer.sanitized_allowed_ips, "fd00::1")
 
         # Case 4: 空
-        peer = PeerInfo("wg0", "key", "ep", "(none)", 0, 180)
+        peer = PeerInfo("wg0", "key", "ep", "(none)", 0, 180, False)
         self.assertEqual(peer.sanitized_allowed_ips, "(none)")
 
 
