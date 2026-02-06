@@ -374,14 +374,15 @@ class WireGuardMonitor:
         except (ValueError, OSError):
             return "Invalid"
 
-    def _print_stats(self) -> None:
+    def _print_stats(self, level: int = logging.INFO) -> None:
         """打印监控统计信息"""
-        self.logger.info(
+        self.logger.log(
+            level,
             f"Statistics - Checks: {self.stats['total_checks']}, "
             f"Failures: {self.stats['failed_checks']}, "
             f"State changes: {self.stats['state_changes']}, "
             f"Parse errors: {self.stats['parse_errors']}, "
-            f"Tracking peers: {len(self.peer_states)}"
+            f"Tracking peers: {len(self.peer_states)}",
         )
 
     def _check_peer_limit(self) -> bool:
@@ -482,7 +483,7 @@ class WireGuardMonitor:
             # 定期输出统计
             current_time = time.time()
             if current_time - last_stats_time >= self.stats_interval:
-                self._print_stats()
+                self._print_stats(logging.DEBUG)
                 last_stats_time = current_time
 
             # 精确的间隔控制
