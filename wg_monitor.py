@@ -137,9 +137,20 @@ class WireGuardMonitor:
         # 验证配置
         self._validate_config()
 
+        # 保存日志配置用于 reopen
+        self._log_path = validated_log_path
+        self._debug = debug
+
         # 注册信号处理
         signal.signal(signal.SIGINT, self._signal_handler)
         signal.signal(signal.SIGTERM, self._signal_handler)
+        signal.signal(signal.SIGHUP, self._sighup_handler)
+
+    def _sighup_handler(self, signum: int, frame: Any) -> None:
+        """处理 SIGHUP 信号，重新打开日志文件（用于 logrotate）"""
+        self.logger.info("Received SIGHUP, reopening log file...")
+        self._setup_logging(self._log_path, self._debug)
+        self.logger.info("Log file reopened successfully.")
 
     def _validate_log_path(self, log_path: str) -> str:
         """验证日志路径，防止路径遍历攻击"""

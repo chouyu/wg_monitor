@@ -23,6 +23,9 @@ ExecStart=/bin/sh -c '/usr/bin/python3 /opt/wg-monitor/wg_monitor.py \
     --stats-interval "${STATS_INTERVAL}" \
     $([ "${DEBUG}" = "true" ] && echo "--debug")'
 
+# Reload (SIGHUP) - 用于 logrotate 后重新打开日志文件
+ExecReload=/bin/kill -HUP $MAINPID
+
 # 重启策略
 Restart=on-failure
 RestartSec=10s
