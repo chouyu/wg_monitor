@@ -79,7 +79,7 @@ The included script installs the monitor as a systemd service:
 
 ```bash
 # 1. Clone repository / 克隆仓库
-git clone https://github.com/your-repo/wg_monitor.git
+git clone https://github.com/chouyu/wg_monitor.git
 cd wg_monitor
 
 # 2. Run installer (requires sudo) / 运行安装程序（需要 sudo）

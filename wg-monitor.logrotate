@@ -1,5 +1,5 @@
 /var/log/wg_monitor.log {
-    daily
+    size 1M
     rotate 7
     compress
     delaycompress
