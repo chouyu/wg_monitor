@@ -1,6 +1,6 @@
 import unittest
-from unittest.mock import MagicMock, PropertyMock, patch
 from typing import Any
+from unittest.mock import MagicMock, patch
 
 from wg_monitor import PeerInfo, WireGuardMonitor
 
@@ -57,40 +57,33 @@ class TestMonitor(unittest.TestCase):
 
     def test_state_change_detection(self) -> None:
         pubkey = "A" * 43 + "="
-        # 初始状态：Offline
+        iface = "wg0"
+        peer_key = (iface, pubkey)
+
         peer = PeerInfo(
-            "wg0", pubkey, "1.1.1.1:123", "10.0.0.1/32", 1678888888, 180, True
+            iface, pubkey, "1.1.1.1:123", "10.0.0.1/32", 1678888888, True
         )
 
-        self.assertNotIn(pubkey, self.monitor.peer_states)
+        self.assertNotIn(peer_key, self.monitor.peer_states)
 
-        # 1. 发现新 Peer (Online)
-        # 这里不需要 mock Property，因为 is_online 是字段了
-        # 我们模拟 run 循环中的逻辑
+        if peer_key not in self.monitor.peer_states:
+            self.monitor.peer_states[peer_key] = peer
 
-        # 手动执行模拟逻辑
-        if peer.pubkey not in self.monitor.peer_states:
-            self.monitor.peer_states[peer.pubkey] = peer
+        self.assertIn(peer_key, self.monitor.peer_states)
+        self.assertEqual(self.monitor.peer_states[peer_key], peer)
+        self.assertTrue(self.monitor.peer_states[peer_key].is_online)
 
-        self.assertIn(pubkey, self.monitor.peer_states)
-        self.assertEqual(self.monitor.peer_states[pubkey], peer)
-        self.assertTrue(self.monitor.peer_states[pubkey].is_online)
-
-        # 2. 状态变为 Offline
-        # 创建一个新的 PeerInfo 对象，模拟从 parse_line 返回的新状态
         peer_offline = PeerInfo(
-            "wg0", pubkey, "1.1.1.1:123", "10.0.0.1/32", 1678888888, 180, False
+            iface, pubkey, "1.1.1.1:123", "10.0.0.1/32", 1678888888, False
         )
 
-        # 模拟逻辑：检测到状态变化
-        last_peer = self.monitor.peer_states[pubkey]
-        self.assertTrue(last_peer.is_online)  # 旧状态应该是 True
-        self.assertFalse(peer_offline.is_online)  # 新状态是 False
+        last_peer = self.monitor.peer_states[peer_key]
+        self.assertTrue(last_peer.is_online)
+        self.assertFalse(peer_offline.is_online)
 
-        # 强制更新
-        self.monitor.peer_states[peer.pubkey] = peer_offline
+        self.monitor.peer_states[peer_key] = peer_offline
 
-        self.assertEqual(self.monitor.peer_states[pubkey], peer_offline)
+        self.assertEqual(self.monitor.peer_states[peer_key], peer_offline)
 
 
 if __name__ == "__main__":

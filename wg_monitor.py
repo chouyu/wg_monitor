@@ -3,7 +3,8 @@
 WireGuard Peer Status Monitor
 
 A production-grade monitoring tool that tracks WireGuard peer connectivity status
-by analyzing handshake timestamps. Provides state change alerts and rotating logs.
+by analyzing handshake timestamps. Provides state change alerts
+and persistent audit logs.
 
 Requirements:
     - Python 3.7+
@@ -29,10 +30,9 @@ import subprocess
 import sys
 import time
 from dataclasses import dataclass
-from logging.handlers import RotatingFileHandler
 from pathlib import Path
 from threading import Event
-from typing import Any, Dict, Optional
+from typing import Any, Dict, Optional, Set, Tuple
 
 # 默认配置
 DEFAULT_LOG_PATH = "/var/log/wg_monitor.log"
@@ -43,21 +43,40 @@ DEFAULT_STATS_INTERVAL = 3600
 # 安全常量
 VALID_LOG_PATHS = ["/var/log", "/tmp", "./logs"]  # 允许的日志目录
 WG_PUBKEY_PATTERN = re.compile(r"^[A-Za-z0-9+/]{43}=$")  # WireGuard 公钥格式
+WG_IFACE_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,15}$")  # WireGuard 接口名格式
 MAX_ENDPOINT_LENGTH = 255
 MAX_PEERS_TRACKED = 10000  # 防止内存无限增长
+
+LOG_FORMAT = "%(asctime)s %(leveltag)s%(message)s"
+LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
+
+LEVEL_TAGS: Dict[int, str] = {
+    logging.DEBUG: "[DEBUG] ",
+    logging.INFO: "",
+    logging.WARNING: "[WARN] ",
+    logging.ERROR: "[ERROR] ",
+    logging.CRITICAL: "[CRIT] ",
+}
+
+
+class CompactFormatter(logging.Formatter):
+    """INFO 级别省略标签，其余级别显示短标签"""
+
+    def format(self, record: logging.LogRecord) -> str:
+        record.leveltag = LEVEL_TAGS.get(record.levelno, f"[{record.levelname}] ")
+        return super().format(record)
 
 
 @dataclass
 class PeerInfo:
-    """定义 Peer 数据结构，提高代码可读性"""
+    """WireGuard Peer 的状态数据，由 _parse_line 解析 wg dump 输出生成"""
 
     iface: str
     pubkey: str
     endpoint: str
-    allowed_ips: str  # 新增
+    allowed_ips: str
     last_handshake: int
-    threshold: int
-    is_online: bool  # 状态快照，解析时计算
+    is_online: bool
 
     @property
     def sanitized_endpoint(self) -> str:
@@ -118,7 +137,7 @@ class WireGuardMonitor:
         self.threshold = threshold
         self.stats_interval = stats_interval
         self.running = True
-        self.peer_states: Dict[str, PeerInfo] = {}  # 改为存储 PeerInfo 对象以对比状态
+        self.peer_states: Dict[Tuple[str, str], PeerInfo] = {}  # key: (iface, pubkey)
         self._stop_event = Event()
         self._wg_not_found_logged = False
 
@@ -149,8 +168,29 @@ class WireGuardMonitor:
     def _sighup_handler(self, signum: int, frame: Any) -> None:
         """处理 SIGHUP 信号，重新打开日志文件（用于 logrotate）"""
         self.logger.info("Received SIGHUP, reopening log file...")
-        self._setup_logging(self._log_path, self._debug)
+        self._reopen_log_file()
         self.logger.info("Log file reopened successfully.")
+
+    def _reopen_log_file(self) -> None:
+        """原子替换文件 handler，避免竞态丢失日志"""
+        logger = self.logger
+        formatter = CompactFormatter(LOG_FORMAT, datefmt=LOG_DATEFMT)
+        try:
+            new_handler = logging.FileHandler(
+                self._log_path, encoding="utf-8"
+            )
+            new_handler.setFormatter(formatter)
+        except OSError as e:
+            logger.error(f"Failed to reopen log file: {e}")
+            return
+
+        old_handlers = [
+            h for h in logger.handlers if isinstance(h, logging.FileHandler)
+        ]
+        logger.addHandler(new_handler)
+        for h in old_handlers:
+            logger.removeHandler(h)
+            h.close()
 
     def _validate_log_path(self, log_path: str) -> str:
         """验证日志路径，防止路径遍历攻击"""
@@ -195,23 +235,20 @@ class WireGuardMonitor:
             return DEFAULT_LOG_PATH
 
     def _setup_logging(self, log_path: str, debug: bool) -> None:
-        """配置带有轮转功能的日志系统"""
+        """配置日志系统（轮转由外部 logrotate 管理）"""
         level = logging.DEBUG if debug else logging.INFO
         logger = logging.getLogger("WGMonitor")
         logger.setLevel(level)
 
-        # 防止重复添加 handler
-        if logger.handlers:
-            logger.handlers.clear()
+        for h in list(logger.handlers):
+            logger.removeHandler(h)
+            h.close()
 
-        formatter = logging.Formatter(
-            "%(asctime)s - %(levelname)s - %(message)s", datefmt="%Y-%m-%d %H:%M:%S"
-        )
+        formatter = CompactFormatter(LOG_FORMAT, datefmt=LOG_DATEFMT)
 
-        # 文件处理器：最大 10MB，保留 5 个备份
         try:
-            file_handler = RotatingFileHandler(
-                log_path, maxBytes=10 * 1024 * 1024, backupCount=5, encoding="utf-8"
+            file_handler = logging.FileHandler(
+                log_path, encoding="utf-8"
             )
             file_handler.setFormatter(formatter)
             logger.addHandler(file_handler)
@@ -224,8 +261,6 @@ class WireGuardMonitor:
         except OSError as e:
             sys.stderr.write(f"Error: Cannot create log file {log_path}: {e}\n")
             sys.exit(1)
-
-        # 控制台输出
 
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(formatter)
@@ -313,9 +348,12 @@ class WireGuardMonitor:
             iface = parts[0]
             pubkey = parts[1]
             endpoint = parts[3]
-            allowed_ips = parts[4]  # 解析 AllowedIPs
+            allowed_ips = parts[4]
 
-            # 验证公钥格式
+            if not WG_IFACE_PATTERN.match(iface):
+                self.logger.debug(f"Invalid iface name, skipping: {iface[:20]}")
+                return None
+
             if not WG_PUBKEY_PATTERN.match(pubkey):
                 self.logger.debug(f"Invalid pubkey format, skipping: {pubkey[:20]}...")
                 return None
@@ -336,7 +374,6 @@ class WireGuardMonitor:
                 self.stats["parse_errors"] += 1
                 return None
 
-            # 计算在线状态 (快照)
             current_time = int(time.time())
             if last_handshake <= 0:
                 is_online = False
@@ -349,7 +386,6 @@ class WireGuardMonitor:
                 endpoint=endpoint,
                 allowed_ips=allowed_ips,
                 last_handshake=last_handshake,
-                threshold=self.threshold,
                 is_online=is_online,
             )
 
@@ -359,16 +395,8 @@ class WireGuardMonitor:
             return None
 
     def _format_peer_info(self, peer: PeerInfo) -> str:
-        """格式化 Peer 信息用于日志输出（安全版本）"""
+        """格式化 Peer 信息用于日志输出"""
         ips = peer.sanitized_allowed_ips
-        # 动态标签：如果包含逗号，说明是复数，或者是带掩码的网段
-        # 或者我们可以更激进：只有当它是纯IP且没有逗号时，用 IP。
-        # 如果 sanitized_allowed_ips 返回的是 "10.0.0.1" (无逗号，无掩码)，用 [IP: ...]
-        # 如果是 "10.0.0.1, 10.0.0.2" (有逗号)，用 [IPs: ...]
-        # 如果是 "192.168.1.0/24" (fallback情况，带掩码)，用 [IPs: ...] 比较合适，
-        # 或者 [AllowedIPs: ...]
-
-        # 简单判定：如果没有逗号，且不包含 '/' (说明去掉了掩码)，则为单 IP
         label = "IP" if "," not in ips and "/" not in ips else "IPs"
         return (
             f"[{peer.iface}] {peer.sanitized_pubkey} "
@@ -376,25 +404,33 @@ class WireGuardMonitor:
         )
 
     def _format_handshake_time(self, timestamp: int) -> str:
-        """格式化握手时间（本地时间，与日志时间戳对齐）"""
+        """格式化握手时间，当天只显示时分秒，跨天显示完整日期"""
         if timestamp <= 0:
             return "Never"
         try:
             dt = datetime.datetime.fromtimestamp(timestamp)
+            today = datetime.date.today()
+            if dt.date() == today:
+                return dt.strftime("%H:%M:%S")
             return dt.strftime("%Y-%m-%d %H:%M:%S")
         except (ValueError, OSError):
             return "Invalid"
 
-    def _print_stats(self, level: int = logging.INFO) -> None:
-        """打印监控统计信息"""
-        self.logger.log(
-            level,
-            f"Statistics - Checks: {self.stats['total_checks']}, "
+    def _print_stats(self) -> None:
+        """打印监控统计信息（仅输出到控制台/journal，不写入日志文件）"""
+        msg = (
+            f"Statistics | Checks: {self.stats['total_checks']}, "
             f"Failures: {self.stats['failed_checks']}, "
-            f"State changes: {self.stats['state_changes']}, "
-            f"Parse errors: {self.stats['parse_errors']}, "
-            f"Tracking peers: {len(self.peer_states)}",
+            f"Changes: {self.stats['state_changes']}, "
+            f"Errors: {self.stats['parse_errors']}, "
+            f"Peers: {len(self.peer_states)}"
         )
+        record = self.logger.makeRecord(
+            self.logger.name, logging.INFO, "", 0, msg, (), None
+        )
+        for handler in self.logger.handlers:
+            if not isinstance(handler, logging.FileHandler):
+                handler.emit(record)
 
     def _check_peer_limit(self) -> bool:
         """检查追踪的 peer 数量，防止内存耗尽"""
@@ -409,9 +445,8 @@ class WireGuardMonitor:
     def run(self) -> None:
         """主监控循环"""
         self.logger.info(
-            f"Monitor started - Interval: {self.interval}s, "
-            f"Threshold: {self.threshold}s, "
-            f"Stats interval: {self.stats_interval}s"
+            f"Monitor started | Interval: {self.interval}s, "
+            f"Threshold: {self.threshold}s, Stats: {self.stats_interval}s"
         )
 
         last_stats_time = time.time()
@@ -420,12 +455,10 @@ class WireGuardMonitor:
             loop_start = time.time()
             self.stats["total_checks"] += 1
 
-            # 检查 peer 数量限制
             if not self._check_peer_limit():
                 self.running = False
                 break
 
-            # 获取 WireGuard 状态
             raw_output = self._fetch_dump()
 
             if not raw_output:
@@ -433,7 +466,8 @@ class WireGuardMonitor:
                 self._stop_event.wait(timeout=self.interval)
                 continue
 
-            # 解析所有 peer
+            seen_keys: Set[Tuple[str, str]] = set()
+
             for line in raw_output.strip().split("\n"):
                 if not line.strip():
                     continue
@@ -442,68 +476,64 @@ class WireGuardMonitor:
                 if not peer:
                     continue
 
+                peer_key = (peer.iface, peer.pubkey)
+                seen_keys.add(peer_key)
                 is_online = peer.is_online
 
-                # 新发现的 Peer
-                if peer.pubkey not in self.peer_states:
-                    self.peer_states[peer.pubkey] = peer
-                    log_level = logging.INFO
-                    status = "ONLINE" if is_online else "OFFLINE"
-
-                    self.logger.log(
-                        log_level,
-                        f"New peer discovered: {self._format_peer_info(peer)} - "
-                        f"{status} (Last handshake: "
-                        f"{self._format_handshake_time(peer.last_handshake)})",
+                if peer_key not in self.peer_states:
+                    self.peer_states[peer_key] = peer
+                    tag = "ONLINE " if is_online else "OFFLINE"
+                    hs = self._format_handshake_time(peer.last_handshake)
+                    self.logger.info(
+                        f"{tag} {self._format_peer_info(peer)}"
+                        f" new (handshake: {hs})",
                     )
 
                 else:
-                    last_peer = self.peer_states[peer.pubkey]
+                    last_peer = self.peer_states[peer_key]
                     last_is_online = last_peer.is_online
 
-                    # 1. 检测状态翻转
                     if last_is_online != is_online:
                         self.stats["state_changes"] += 1
-                        status_str = "ONLINE" if is_online else "OFFLINE"
-                        log_level = logging.INFO
-
-                        self.logger.log(
-                            log_level,
-                            f"Status change: {self._format_peer_info(peer)} "
-                            f"→ {status_str} (Last handshake: "
-                            f"{self._format_handshake_time(peer.last_handshake)})",
+                        tag = "ONLINE " if is_online else "OFFLINE"
+                        hs = self._format_handshake_time(peer.last_handshake)
+                        self.logger.info(
+                            f"{tag} {self._format_peer_info(peer)}"
+                            f" (handshake: {hs})",
                         )
 
-                    # 2. 检测 Endpoint 变更 (Roaming)
-                    # 仅在 Online 时或变为 Online 时有意义
-                    # 如果之前是 Online 且现在也是 Online，但 Endpoint 变了
-                    # 或者如果刚变成 Online，我们已经在上面的 Status change
-                    # 记录了新的 Endpoint (通过 _format_peer_info)，
-                    # 所以这里主要关注 "保持 Online 但换了 IP" 的情况。
                     elif is_online and last_peer.endpoint != peer.endpoint:
                         self.logger.info(
-                            f"Endpoint changed (Roaming): "
-                            f"{self._format_peer_info(peer)} "
-                            f"(Old: {last_peer.sanitized_endpoint} "
-                            f"→ New: {peer.sanitized_endpoint})"
+                            f"ROAMING {self._format_peer_info(peer)}"
+                            f" {last_peer.sanitized_endpoint}"
+                            f" → {peer.sanitized_endpoint}"
                         )
 
-                    # 更新状态
-                    self.peer_states[peer.pubkey] = peer
+                    self.peer_states[peer_key] = peer
 
-            # 定期输出统计
+            removed_keys = set(self.peer_states.keys()) - seen_keys
+            for key in removed_keys:
+                removed_peer = self.peer_states.pop(key)
+                hs = self._format_handshake_time(
+                    removed_peer.last_handshake
+                )
+                self.logger.warning(
+                    f"REMOVED {self._format_peer_info(removed_peer)}"
+                    f" (handshake: {hs})"
+                )
+                self.stats["state_changes"] += 1
+
             current_time = time.time()
             if current_time - last_stats_time >= self.stats_interval:
-                self._print_stats(logging.DEBUG)
+                self._print_stats()
                 last_stats_time = current_time
 
-            # 精确的间隔控制
             elapsed = time.time() - loop_start
             sleep_time = max(0, self.interval - elapsed)
             self._stop_event.wait(timeout=sleep_time)
 
         self.logger.info("Monitor stopped gracefully.")
-        self._print_stats()  # 退出前输出最终统计
+        self._print_stats()
 
 
 def check_root() -> None:
@@ -577,13 +607,9 @@ Security notes:
 
 def main() -> None:
     """主入口函数"""
-    # 检查权限
     check_root()
-
-    # 解析参数
     args = parse_arguments()
 
-    # 启动监控
     try:
         monitor = WireGuardMonitor(
             log_path=args.log_path,
@@ -597,7 +623,6 @@ def main() -> None:
         print("\nMonitor interrupted by user")
         sys.exit(0)
     except Exception as e:
-        # 使用基本配置以确保致命错误被记录（如果没有配置其他 handler）
         if not logging.getLogger().handlers:
             logging.basicConfig(level=logging.ERROR)
         logging.exception(f"Fatal error: {e}")

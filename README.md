@@ -22,14 +22,14 @@ While `wg show` gives you the *current* status, it doesn't tell you **when** a p
 ## Key Features
 ## 核心特性
 
-- **Connection Auditing**: Logs `ONLINE` and `OFFLINE` events with precise UTC timestamps.
-- **连接审计**：记录 `ONLINE`（上线）和 `OFFLINE`（下线）事件及精确的 UTC 时间戳。
+- **Connection Auditing**: Logs `ONLINE` and `OFFLINE` events with precise local timestamps.
+- **连接审计**：记录 `ONLINE`（上线）和 `OFFLINE`（下线）事件及精确的本地时间戳。
 
 - **Zero Dependencies**: Written in pure Python 3 (Standard Library only). No `pip install` required.
 - **零依赖**：纯 Python 3 编写（仅使用标准库）。无需 `pip install`。
 
-- **Production Ready**: Runs as a Systemd service with automated log rotation (10MB x 5 backups).
-- **生产就绪**：作为 Systemd 服务运行，内置自动日志轮转（10MB x 5 个备份）。
+- **Production Ready**: Runs as a Systemd service with logrotate-based log rotation (1MB x 7 rotations).
+- **生产就绪**：作为 Systemd 服务运行，通过 logrotate 进行日志轮转（1MB x 7 个轮转）。
 
 - **Security First**: 
 - **安全优先**：
@@ -51,11 +51,10 @@ The tool generates structured logs in `/var/log/wg_monitor.log`:
 工具会在 `/var/log/wg_monitor.log` 生成结构化日志：
 
 ```text
-2023-10-27 10:00:00 - INFO - Monitor started - Interval: 30s, Threshold: 180s
-2023-10-27 10:01:30 - INFO - New peer discovered: [wg0] AbC1...8xYz (192.168.1.50:51820) - ONLINE (Last handshake: 2023-10-27 10:01:25 UTC)
-2023-10-27 10:45:00 - WARNING - Status change: [wg0] AbC1...8xYz (192.168.1.50:51820) → OFFLINE (Last handshake: 2023-10-27 10:01:25 UTC)
-2023-10-27 11:15:20 - INFO - Status change: [wg0] AbC1...8xYz (192.168.1.50:51820) → ONLINE (Last handshake: 2023-10-27 11:15:15 UTC)
-2023-10-27 12:00:00 - INFO - Statistics - Checks: 120, Failures: 0, State changes: 2, Tracking peers: 15
+2023-10-27 10:00:00 Monitor started | Interval: 30s, Threshold: 180s, Stats: 3600s
+2023-10-27 10:01:30 ONLINE  [wg0] AbC1dEf2...4xYz5678 (192.168.1.50:51820) [IP: 10.0.0.1] new (handshake: 10:01:25)
+2023-10-27 10:45:00 OFFLINE [wg0] AbC1dEf2...4xYz5678 (192.168.1.50:51820) [IP: 10.0.0.1] (handshake: 10:01:25)
+2023-10-27 11:15:20 ONLINE  [wg0] AbC1dEf2...4xYz5678 (192.168.1.50:51820) [IP: 10.0.0.1] (handshake: 11:15:15)
 ```
 
 ## Requirements
@@ -121,7 +120,7 @@ You can configure the service by editing `/etc/default/wg-monitor`.
 | `LOG_PATH` | `--log-path` | `/var/log/wg_monitor.log` | Path to the log file.<br>日志文件路径。 |
 | `INTERVAL` | `--interval` | `30` | How often (seconds) to check peer status.<br>检查 Peer 状态的频率（秒）。 |
 | `THRESHOLD`| `--threshold`| `180` | Seconds since last handshake to mark peer offline.<br>标记 Peer 为离线的无握手时长（秒）。 |
-| `STATS_INTERVAL` | `--stats-interval`| `3600` | How often (seconds) to log summary statistics.<br>记录统计摘要的频率（秒）。 |
+| `STATS_INTERVAL` | `--stats-interval`| `3600` | How often (seconds) to output summary statistics to console.<br>输出统计摘要到控制台的频率（秒）。 |
 | `DEBUG` | `--debug` | `false` | Enable verbose debug logging.<br>启用详细调试日志。 |
 
 ### Running Multiple Instances
