@@ -21,7 +21,9 @@ ExecStart=/bin/sh -c 'exec /usr/bin/python3 /opt/wg-monitor/wg_monitor.py \
     --interval "${INTERVAL}" \
     --threshold "${THRESHOLD}" \
     --stats-interval "${STATS_INTERVAL}" \
-    $([ "${DEBUG}" = "true" ] && echo "--debug")'
+    $([ "${DEBUG}" = "true" ] && echo "--debug") \
+    $([ -n "${INTERFACE}" ] && echo "--interface ${INTERFACE}") \
+    $([ -n "${ON_CHANGE_SCRIPT}" ] && echo "--on-change-script ${ON_CHANGE_SCRIPT}")'
 
 # Reload (SIGHUP) - 用于 logrotate 后重新打开日志文件
 ExecReload=/bin/kill -HUP $MAINPID

@@ -25,6 +25,7 @@ import datetime
 import logging
 import os
 import re
+import shutil
 import signal
 import subprocess
 import sys
@@ -32,20 +33,24 @@ import time
 from dataclasses import dataclass
 from pathlib import Path
 from threading import Event
-from typing import Any, Dict, Optional, Set, Tuple
+from typing import Any, Dict, List, Optional, Set, Tuple
+
+__version__ = "2.0.0"
 
 # 默认配置
 DEFAULT_LOG_PATH = "/var/log/wg_monitor.log"
 DEFAULT_CHECK_INTERVAL = 30
 DEFAULT_OFFLINE_THRESHOLD = 180
 DEFAULT_STATS_INTERVAL = 3600
+ON_CHANGE_SCRIPT_TIMEOUT = 10
 
 # 安全常量
-VALID_LOG_PATHS = ["/var/log", "/tmp", "./logs"]  # 允许的日志目录
+VALID_LOG_PATHS = ["/var/log", "/tmp"]  # 允许的日志目录（仅绝对路径）
 WG_PUBKEY_PATTERN = re.compile(r"^[A-Za-z0-9+/]{43}=$")  # WireGuard 公钥格式
 WG_IFACE_PATTERN = re.compile(r"^[a-zA-Z0-9_-]{1,15}$")  # WireGuard 接口名格式
 MAX_ENDPOINT_LENGTH = 255
 MAX_PEERS_TRACKED = 10000  # 防止内存无限增长
+SAFE_WG_SEARCH_PATHS = "/usr/bin:/usr/sbin:/bin:/sbin"
 
 LOG_FORMAT = "%(asctime)s %(leveltag)s%(message)s"
 LOG_DATEFMT = "%Y-%m-%d %H:%M:%S"
@@ -122,6 +127,16 @@ class PeerInfo:
         return self.pubkey
 
 
+@dataclass
+class MonitorStats:
+    """监控统计数据"""
+
+    total_checks: int = 0
+    failed_checks: int = 0
+    state_changes: int = 0
+    parse_errors: int = 0
+
+
 class WireGuardMonitor:
     """WireGuard Peer 状态监控器"""
 
@@ -132,26 +147,27 @@ class WireGuardMonitor:
         threshold: int,
         stats_interval: int,
         debug: bool,
+        interface: Optional[str] = None,
+        on_change_script: Optional[str] = None,
     ):
         self.interval = interval
         self.threshold = threshold
         self.stats_interval = stats_interval
-        self.running = True
+        self.interface = interface
+        self.on_change_script = on_change_script
         self.peer_states: Dict[Tuple[str, str], PeerInfo] = {}  # key: (iface, pubkey)
         self._stop_event = Event()
-        self._wg_not_found_logged = False
+        self._console_handler: Optional[logging.Handler] = None
 
         # 统计信息
-        self.stats = {
-            "total_checks": 0,
-            "failed_checks": 0,
-            "state_changes": 0,
-            "parse_errors": 0,
-        }
+        self.stats = MonitorStats()
 
         # 验证并初始化日志
         validated_log_path = self._validate_log_path(log_path)
         self._setup_logging(validated_log_path, debug)
+
+        # 解析 wg 命令路径（启动时一次性检查）
+        self._wg_path = self._resolve_wg_path()
 
         # 验证配置
         self._validate_config()
@@ -159,6 +175,18 @@ class WireGuardMonitor:
         # 保存日志配置用于 reopen
         self._log_path = validated_log_path
         self._debug = debug
+
+        # 验证 on_change_script
+        if self.on_change_script:
+            script_path = Path(self.on_change_script)
+            if not script_path.is_file():
+                self.logger.warning(
+                    f"on-change-script not found: {self.on_change_script}"
+                )
+            elif not os.access(self.on_change_script, os.X_OK):
+                self.logger.warning(
+                    f"on-change-script not executable: {self.on_change_script}"
+                )
 
         # 注册信号处理
         signal.signal(signal.SIGINT, self._signal_handler)
@@ -265,8 +293,21 @@ class WireGuardMonitor:
         console_handler = logging.StreamHandler()
         console_handler.setFormatter(formatter)
         logger.addHandler(console_handler)
+        self._console_handler = console_handler
 
         self.logger = logger
+
+    def _resolve_wg_path(self) -> str:
+        """在受限 PATH 中查找 wg 命令的绝对路径，找不到则退出"""
+        wg_path = shutil.which("wg", path=SAFE_WG_SEARCH_PATHS)
+        if not wg_path:
+            self.logger.critical(
+                "Command 'wg' not found in "
+                f"{SAFE_WG_SEARCH_PATHS}. Is WireGuard installed?"
+            )
+            sys.exit(1)
+        self.logger.debug(f"Using wg at: {wg_path}")
+        return wg_path
 
     def _validate_config(self) -> None:
         """验证配置参数"""
@@ -294,42 +335,71 @@ class WireGuardMonitor:
             self.logger.warning("Stats interval too small (<60s), setting to 60s")
             self.stats_interval = 60
 
+        if self.interface:
+            if not WG_IFACE_PATTERN.match(self.interface):
+                self.logger.critical(
+                    f"Invalid interface name format: {self.interface[:20]}"
+                )
+                sys.exit(1)
+            self._verify_interface(self.interface)
+
+    def _verify_interface(self, iface: str) -> None:
+        """验证 WireGuard 接口是否存在（通过实际调用 wg 命令）"""
+        try:
+            result = subprocess.run(
+                [self._wg_path, "show", iface, "dump"],
+                capture_output=True,
+                text=True,
+                timeout=10,
+            )
+            if result.returncode != 0:
+                stderr = result.stderr.strip()[:200] if result.stderr else ""
+                self.logger.critical(
+                    f"Interface '{iface}' not found or not a WireGuard "
+                    f"interface: {stderr}"
+                )
+                sys.exit(1)
+        except subprocess.TimeoutExpired:
+            self.logger.warning(
+                f"Timeout verifying interface '{iface}', will retry during monitoring"
+            )
+
     def _signal_handler(self, signum: int, frame: Any) -> None:
         """处理退出信号"""
         self.logger.info(f"Received signal {signum}, shutting down gracefully...")
-        self.running = False
         self._stop_event.set()
 
     def _fetch_dump(self) -> str:
         """执行 wg 命令并获取输出"""
         try:
-            # 复制当前环境并仅限制 PATH，保留 LC_ALL/LANG 等
-            env = os.environ.copy()
-            env["PATH"] = "/usr/bin:/usr/sbin:/bin:/sbin"
-
+            iface_arg = self.interface if self.interface else "all"
             result = subprocess.run(
-                ["wg", "show", "all", "dump"],
+                [self._wg_path, "show", iface_arg, "dump"],
                 capture_output=True,
                 text=True,
                 check=True,
                 timeout=10,
-                env=env,
             )
             return result.stdout
         except subprocess.TimeoutExpired:
-            self.logger.error("Command 'wg show all dump' timed out after 10s")
+            self.logger.error(
+                f"Command '{self._wg_path} show {iface_arg} dump' timed out"
+            )
         except subprocess.CalledProcessError as e:
             self.logger.error(
                 f"Command failed with return code {e.returncode}: {e.stderr}"
             )
-        except FileNotFoundError:
-            if not self._wg_not_found_logged:
-                self.logger.critical("Command 'wg' not found. Is WireGuard installed?")
-                self._wg_not_found_logged = True
-                self.running = False
         except Exception:
             self.logger.exception("Unexpected error executing command")
         return ""
+
+    @staticmethod
+    def _is_interface_line(parts: List[str]) -> bool:
+        """判断是否为接口配置行（listen_port 是纯数字或 'off'）"""
+        if len(parts) < 4:
+            return False
+        listen_port = parts[3]
+        return listen_port.isdigit() or listen_port == "off"
 
     def _parse_line(self, line: str) -> Optional[PeerInfo]:
         """解析单行数据，包含严格的安全验证"""
@@ -341,8 +411,10 @@ class WireGuardMonitor:
             # Peer 行: interface_name, public_key, preshared_key, endpoint, allowed_ips,
             #         latest_handshake, transfer_rx, transfer_tx, persistent_keepalive
 
-            # 过滤接口配置行（通常 5 个字段）
             if len(parts) < 9:
+                return None
+
+            if self._is_interface_line(parts):
                 return None
 
             iface = parts[0]
@@ -358,7 +430,6 @@ class WireGuardMonitor:
                 self.logger.debug(f"Invalid pubkey format, skipping: {pubkey[:20]}...")
                 return None
 
-            # 解析握手时间戳
             try:
                 last_handshake = int(parts[5])
                 if last_handshake < 0:
@@ -371,7 +442,7 @@ class WireGuardMonitor:
                 self.logger.warning(
                     f"Failed to parse handshake timestamp: {line[:50]}..."
                 )
-                self.stats["parse_errors"] += 1
+                self.stats.parse_errors += 1
                 return None
 
             current_time = int(time.time())
@@ -391,7 +462,7 @@ class WireGuardMonitor:
 
         except (IndexError, ValueError) as e:
             self.logger.warning(f"Parse error: {e}")
-            self.stats["parse_errors"] += 1
+            self.stats.parse_errors += 1
             return None
 
     def _format_peer_info(self, peer: PeerInfo) -> str:
@@ -419,18 +490,17 @@ class WireGuardMonitor:
     def _print_stats(self) -> None:
         """打印监控统计信息（仅输出到控制台/journal，不写入日志文件）"""
         msg = (
-            f"Statistics | Checks: {self.stats['total_checks']}, "
-            f"Failures: {self.stats['failed_checks']}, "
-            f"Changes: {self.stats['state_changes']}, "
-            f"Errors: {self.stats['parse_errors']}, "
+            f"Statistics | Checks: {self.stats.total_checks}, "
+            f"Failures: {self.stats.failed_checks}, "
+            f"Changes: {self.stats.state_changes}, "
+            f"Errors: {self.stats.parse_errors}, "
             f"Peers: {len(self.peer_states)}"
         )
-        record = self.logger.makeRecord(
-            self.logger.name, logging.INFO, "", 0, msg, (), None
-        )
-        for handler in self.logger.handlers:
-            if not isinstance(handler, logging.FileHandler):
-                handler.emit(record)
+        if self._console_handler:
+            record = self.logger.makeRecord(
+                self.logger.name, logging.INFO, "", 0, msg, (), None
+            )
+            self._console_handler.emit(record)
 
     def _check_peer_limit(self) -> bool:
         """检查追踪的 peer 数量，防止内存耗尽"""
@@ -442,27 +512,58 @@ class WireGuardMonitor:
             return False
         return True
 
+    def _run_on_change_script(self, peer: PeerInfo, event: str) -> None:
+        """状态变更时调用外部脚本"""
+        if not self.on_change_script:
+            return
+        try:
+            env = os.environ.copy()
+            env["PATH"] = "/usr/bin:/usr/sbin:/bin:/sbin"
+            env["PEER_EVENT"] = event
+            env["PEER_IFACE"] = peer.iface
+            env["PEER_PUBKEY"] = peer.pubkey
+            env["PEER_ENDPOINT"] = peer.sanitized_endpoint
+            env["PEER_ALLOWED_IPS"] = peer.sanitized_allowed_ips
+            env["PEER_HANDSHAKE"] = str(peer.last_handshake)
+            env["PEER_ONLINE"] = "1" if peer.is_online else "0"
+
+            subprocess.run(
+                [self.on_change_script],
+                env=env,
+                timeout=ON_CHANGE_SCRIPT_TIMEOUT,
+                check=False,
+                capture_output=True,
+            )
+        except subprocess.TimeoutExpired:
+            self.logger.warning(
+                f"on-change-script timed out after {ON_CHANGE_SCRIPT_TIMEOUT}s"
+            )
+        except OSError as e:
+            self.logger.warning(f"on-change-script failed: {e}")
+
     def run(self) -> None:
         """主监控循环"""
+        iface_info = f", Interface: {self.interface}" if self.interface else ""
         self.logger.info(
             f"Monitor started | Interval: {self.interval}s, "
             f"Threshold: {self.threshold}s, Stats: {self.stats_interval}s"
+            f"{iface_info}"
         )
 
         last_stats_time = time.time()
 
-        while self.running:
+        while not self._stop_event.is_set():
             loop_start = time.time()
-            self.stats["total_checks"] += 1
+            self.stats.total_checks += 1
 
             if not self._check_peer_limit():
-                self.running = False
+                self._stop_event.set()
                 break
 
             raw_output = self._fetch_dump()
 
             if not raw_output:
-                self.stats["failed_checks"] += 1
+                self.stats.failed_checks += 1
                 self._stop_event.wait(timeout=self.interval)
                 continue
 
@@ -488,19 +589,21 @@ class WireGuardMonitor:
                         f"{tag} {self._format_peer_info(peer)}"
                         f" new (handshake: {hs})",
                     )
+                    self._run_on_change_script(peer, tag.strip())
 
                 else:
                     last_peer = self.peer_states[peer_key]
                     last_is_online = last_peer.is_online
 
                     if last_is_online != is_online:
-                        self.stats["state_changes"] += 1
+                        self.stats.state_changes += 1
                         tag = "ONLINE " if is_online else "OFFLINE"
                         hs = self._format_handshake_time(peer.last_handshake)
                         self.logger.info(
                             f"{tag} {self._format_peer_info(peer)}"
                             f" (handshake: {hs})",
                         )
+                        self._run_on_change_script(peer, tag.strip())
 
                     elif is_online and last_peer.endpoint != peer.endpoint:
                         self.logger.info(
@@ -521,7 +624,8 @@ class WireGuardMonitor:
                     f"REMOVED {self._format_peer_info(removed_peer)}"
                     f" (handshake: {hs})"
                 )
-                self.stats["state_changes"] += 1
+                self.stats.state_changes += 1
+                self._run_on_change_script(removed_peer, "REMOVED")
 
             current_time = time.time()
             if current_time - last_stats_time >= self.stats_interval:
@@ -559,8 +663,11 @@ Examples:
   # Custom intervals and debug mode
   sudo python3 wg_monitor.py --interval 60 --threshold 300 --debug
 
-  # Custom log path
-  sudo python3 wg_monitor.py --log-path /var/log/custom_wg.log
+  # Monitor specific interface
+  sudo python3 wg_monitor.py --interface wg0
+
+  # Run script on state change
+  sudo python3 wg_monitor.py --on-change-script /opt/wg-monitor/notify.sh
 
 Security notes:
   - Log paths are restricted to predefined directories
@@ -597,9 +704,19 @@ Security notes:
             f"Statistics report interval in seconds (default: {DEFAULT_STATS_INTERVAL})"
         ),
     )
+    parser.add_argument(
+        "--interface",
+        default=None,
+        help="Monitor only specified WireGuard interface (default: all)",
+    )
+    parser.add_argument(
+        "--on-change-script",
+        default=None,
+        help="Script to run on peer state change (receives peer info as env vars)",
+    )
     parser.add_argument("--debug", action="store_true", help="Enable debug logging")
     parser.add_argument(
-        "--version", action="version", version="WireGuard Monitor v2.0.0"
+        "--version", action="version", version=f"WireGuard Monitor v{__version__}"
     )
 
     return parser.parse_args()
@@ -617,6 +734,8 @@ def main() -> None:
             threshold=args.threshold,
             stats_interval=args.stats_interval,
             debug=args.debug,
+            interface=args.interface,
+            on_change_script=args.on_change_script,
         )
         monitor.run()
     except KeyboardInterrupt:

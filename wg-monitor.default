@@ -3,8 +3,8 @@
 # Installed to /etc/default/wg-monitor
 # 安装位置：/etc/default/wg-monitor
 
-# Path to the log file (must be in /var/log, /tmp, or ./logs)
-# 日志文件路径（必须位于 /var/log, /tmp, 或 ./logs）
+# Path to the log file (must be in /var/log or /tmp)
+# 日志文件路径（必须位于 /var/log 或 /tmp）
 LOG_PATH="/var/log/wg_monitor.log"
 
 # Check interval in seconds
@@ -22,3 +22,15 @@ STATS_INTERVAL=3600
 # Enable debug logging (true/false)
 # 启用调试日志（true/false）
 DEBUG=false
+
+# Monitor only specified interface (leave empty for all)
+# 仅监控指定接口（留空则监控所有接口）
+INTERFACE=
+
+# Script to run on peer state change (leave empty to disable)
+# Peer 状态变更时执行的脚本（留空则禁用）
+# Environment variables passed: PEER_EVENT, PEER_IFACE, PEER_PUBKEY,
+#   PEER_ENDPOINT, PEER_ALLOWED_IPS, PEER_HANDSHAKE, PEER_ONLINE
+# 传入的环境变量：PEER_EVENT, PEER_IFACE, PEER_PUBKEY,
+#   PEER_ENDPOINT, PEER_ALLOWED_IPS, PEER_HANDSHAKE, PEER_ONLINE
+ON_CHANGE_SCRIPT=

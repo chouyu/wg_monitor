@@ -5,5 +5,10 @@
     delaycompress
     missingok
     notifempty
-    copytruncate
+    postrotate
+        systemctl reload wg-monitor 2>/dev/null || true
+        for svc in $(systemctl list-units --plain --no-legend 'wg-monitor@*' | awk '{print $1}'); do
+            systemctl reload "$svc" 2>/dev/null || true
+        done
+    endscript
 }
